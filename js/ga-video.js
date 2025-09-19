@@ -1,26 +1,25 @@
 /**
- * GA4 YouTube Video Tracking
- * Custom tracking for embedded YouTube videos with hidden controls
+ * GA4 YouTube Video Tracking - Session-based Total Watch Time
+ * Only reports total watch time when session ends (page close/unload)
  */
 
 (function() {
     'use strict';
     
     // Configuration
-    const PROGRESS_SECONDS = [5, 10, 15, 30, 45, 60, 75, 90]; // Track specific seconds
     const VIDEO_ID = 'nyu_youtube_ad';
     
-    // Tracking state
-    let videoState = {
-        isStarted: false,
-        duration: 0,
-        maxWatched: 0, // Anti-skip logic: track max watched time
-        progressTracked: new Set(), // Track which progress points have been sent
-        startTime: null,
-        totalWatchedMs: 0,
+    // Session tracking state
+    let sessionState = {
+        isTrackingEnabled: false, // Only true after "Tap to Start"
+        totalWatchTimeSeconds: 0, // Cumulative watch time across all plays
+        sessionStartTime: null,
+        currentPlayStartTime: null,
         player: null,
-        isMuted: false,
-        currentTime: 0
+        duration: 0,
+        hasStartedOnce: false, // Track if video ever started playing
+        playCount: 0, // How many times video was played
+        lastReportedTime: 0 // Prevent duplicate time counting
     };
     
     // YouTube API ready flag
@@ -32,7 +31,7 @@
     function loadYouTubeAPI() {
         if (window.YT && window.YT.Player) {
             youTubeAPIReady = true;
-            initVideoTracking();
+            initVideoPlayer();
             return;
         }
         
@@ -45,85 +44,67 @@
         // YouTube API calls this when ready
         window.onYouTubeIframeAPIReady = function() {
             youTubeAPIReady = true;
-            initVideoTracking();
+            initVideoPlayer();
         };
     }
     
     /**
-     * Initialize video tracking
+     * Initialize YouTube player
      */
-    function initVideoTracking() {
-        // Wait for GALite to be available
-        if (!window.GALite) {
-            setTimeout(initVideoTracking, 100);
-            return;
-        }
-        
-        if (!youTubeAPIReady) {
-            loadYouTubeAPI();
-            return;
-        }
-        
-        // Find YouTube iframe
+    function initVideoPlayer() {
         const iframe = document.getElementById('adVideo');
-        if (iframe && iframe.tagName === 'IFRAME') {
-            setupYouTubeTracking(iframe);
+        if (!iframe) {
+            console.log('Video iframe not found');
+            return;
+        }
+        
+        try {
+            sessionState.player = new YT.Player('adVideo', {
+                events: {
+                    'onReady': onPlayerReady,
+                    'onStateChange': onPlayerStateChange
+                }
+            });
+            
+            console.log('YouTube player initialized');
+        } catch (error) {
+            console.log('Error initializing YouTube player:', error);
         }
     }
     
     /**
-     * Set up YouTube tracking
-     */
-    function setupYouTubeTracking(iframe) {
-        console.log('Setting up YouTube tracking...');
-        
-        // Create YouTube player instance
-        videoState.player = new YT.Player(iframe, {
-            events: {
-                'onReady': onPlayerReady,
-                'onStateChange': onPlayerStateChange
-            }
-        });
-    }
-    
-    /**
-     * YouTube player ready callback
+     * Player ready - set up tracking but don't start yet
      */
     function onPlayerReady(event) {
         console.log('YouTube player ready');
-        videoState.duration = videoState.player.getDuration();
+        sessionState.duration = sessionState.player.getDuration();
         
-        // Set up time tracking interval
-        setInterval(() => {
-            if (videoState.player && videoState.player.getPlayerState() === YT.PlayerState.PLAYING) {
-                const currentTime = videoState.player.getCurrentTime();
-                updateVideoProgress(currentTime);
-            }
-            
-            // Anti-pause: If video is paused, resume it immediately
-            if (videoState.player && videoState.player.getPlayerState() === YT.PlayerState.PAUSED) {
-                console.log('Video paused - resuming automatically');
-                videoState.player.playVideo();
-            }
-        }, 250); // Check every 250ms for smooth tracking
-        
-        // Wait for tap-to-start before beginning video playback
+        // Wait for "Tap to Start" before enabling tracking
         waitForTapToStart();
+        
+        // Set up page unload tracking
+        setupUnloadTracking();
     }
     
     /**
-     * YouTube player state change callback
+     * Handle player state changes
      */
     function onPlayerStateChange(event) {
-        const currentTime = videoState.player.getCurrentTime();
+        if (!sessionState.isTrackingEnabled) {
+            return; // Don't track until "Tap to Start" is clicked
+        }
+        
+        const currentTime = sessionState.player.getCurrentTime();
         
         switch (event.data) {
             case YT.PlayerState.PLAYING:
                 handleVideoPlay(currentTime);
                 break;
+                
             case YT.PlayerState.PAUSED:
                 handleVideoPause(currentTime);
                 break;
+                
             case YT.PlayerState.ENDED:
                 handleVideoEnd(currentTime);
                 break;
@@ -131,271 +112,224 @@
     }
     
     /**
-     * Wait for tap-to-start before beginning video playback
+     * Handle video play start
+     */
+    function handleVideoPlay(currentTime) {
+        console.log('Video started playing at:', currentTime);
+        
+        if (!sessionState.hasStartedOnce) {
+            sessionState.hasStartedOnce = true;
+            sessionState.sessionStartTime = Date.now();
+        }
+        
+        sessionState.playCount++;
+        sessionState.currentPlayStartTime = currentTime;
+        sessionState.lastReportedTime = currentTime;
+        
+        console.log(`Play #${sessionState.playCount} started at ${currentTime}s`);
+    }
+    
+    /**
+     * Handle video pause
+     */
+    function handleVideoPause(currentTime) {
+        if (sessionState.currentPlayStartTime !== null) {
+            const watchedDuration = currentTime - sessionState.currentPlayStartTime;
+            if (watchedDuration > 0) {
+                sessionState.totalWatchTimeSeconds += watchedDuration;
+                console.log(`Added ${watchedDuration.toFixed(2)}s to total. Total: ${sessionState.totalWatchTimeSeconds.toFixed(2)}s`);
+            }
+            sessionState.currentPlayStartTime = null;
+        }
+    }
+    
+    /**
+     * Handle video end
+     */
+    function handleVideoEnd(currentTime) {
+        console.log('Video ended');
+        handleVideoPause(currentTime); // Count the final segment
+        
+        // Video completed - could restart, so reset for next play
+        sessionState.currentPlayStartTime = null;
+    }
+    
+    /**
+     * Wait for "Tap to Start" to enable tracking
      */
     function waitForTapToStart() {
         const tapOverlay = document.getElementById('tap-to-start-overlay');
-        if (!tapOverlay) {
-            // No tap-to-start overlay, start video immediately
-            startVideo();
-            return;
+        if (tapOverlay) {
+            // Override the existing tap handler to enable our tracking
+            tapOverlay.addEventListener('click', () => {
+                console.log('Tap to Start clicked - Video tracking enabled');
+                sessionState.isTrackingEnabled = true;
+                
+                // Start the video with browser-compliant autoplay
+                setTimeout(() => {
+                    startVideoWithAutoplay();
+                }, 500);
+            });
         }
-        
-        // Check if overlay is already hidden
-        if (tapOverlay.classList.contains('hidden') || 
-            window.getComputedStyle(tapOverlay).display === 'none') {
-            startVideo();
-            return;
-        }
-        
-        // Wait for tap-to-start click
-        tapOverlay.addEventListener('click', () => {
-            console.log('Tap to start - starting video playback');
-            startVideo();
-        }, { once: true });
     }
     
     /**
-     * Start video playback with proper autoplay handling
+     * Start video with browser-compliant autoplay strategy
      */
-    function startVideo() {
-        if (!videoState.player) {
-            console.log('Player not ready yet');
-            return;
-        }
-        
-        console.log('Starting video playback...');
-        
+    function startVideoWithAutoplay() {
         try {
-            // Start muted first (browsers allow muted autoplay)
-            videoState.player.mute();
-            videoState.isMuted = true;
+            // Start muted (browser allows this)
+            sessionState.player.mute();
+            sessionState.player.playVideo();
             
-            // Play the video
-            videoState.player.playVideo();
-            
-            // After a short delay, unmute it
+            // Then unmute after a short delay (user has interacted)
             setTimeout(() => {
-                videoState.player.unMute();
-                videoState.isMuted = false;
-                updateMuteIcon();
-                console.log('Video unmuted after autoplay');
-            }, 500);
+                sessionState.player.unMute();
+                updateMuteIcon(false);
+                console.log('Video started and unmuted');
+            }, 1000);
             
         } catch (error) {
-            console.log('Autoplay failed:', error);
-            // Fallback: keep muted and let user unmute manually
-            videoState.player.mute();
-            videoState.isMuted = true;
-            videoState.player.playVideo();
-            updateMuteIcon();
+            console.log('Error starting video:', error);
         }
     }
     
     /**
-     * Handle video play event
+     * Update mute icon
      */
-    function handleVideoPlay(currentTime) {
-        console.log('Video play at:', currentTime);
-        
-        if (!videoState.isStarted) {
-            videoState.isStarted = true;
-            videoState.startTime = Date.now();
-            
-            trackVideoEvent('video_start', {
-                video_duration: videoState.duration,
-                current_time: currentTime
-            });
-        }
-        
-        trackVideoEvent('video_play', {
-            current_time: currentTime,
-            is_muted: videoState.isMuted
-        });
-    }
-    
-    /**
-     * Handle video pause event
-     */
-    function handleVideoPause(currentTime) {
-        console.log('Video pause at:', currentTime);
-        
-        trackVideoEvent('video_pause', {
-            current_time: currentTime,
-            watch_time_s: Math.floor(currentTime)
-        });
-    }
-    
-    /**
-     * Handle video end event
-     */
-    function handleVideoEnd(currentTime) {
-        console.log('Video ended at:', currentTime);
-        
-        const totalWatchedS = Math.floor(videoState.totalWatchedMs / 1000);
-        
-        trackVideoEvent('video_complete', {
-            duration_s: videoState.duration,
-            watched_s: totalWatchedS,
-            completion_rate: Math.min(100, (currentTime / videoState.duration) * 100),
-            max_watched_s: Math.floor(videoState.maxWatched)
-        });
-    }
-    
-    /**
-     * Update video progress and track milestones
-     */
-    function updateVideoProgress(currentTime) {
-        videoState.currentTime = currentTime;
-        
-        // Anti-skip logic: only count forward progress
-        if (currentTime > videoState.maxWatched) {
-            const progressMs = (currentTime - videoState.maxWatched) * 1000;
-            videoState.totalWatchedMs += progressMs;
-            videoState.maxWatched = currentTime;
-        }
-        
-        // Track specific second milestones
-        PROGRESS_SECONDS.forEach(second => {
-            if (currentTime >= second && !videoState.progressTracked.has(second)) {
-                videoState.progressTracked.add(second);
-                
-                trackVideoEvent('video_progress', {
-                    progress_second: second,
-                    current_time: currentTime,
-                    watched_ms: videoState.totalWatchedMs,
-                    percent_watched: Math.min(100, (currentTime / videoState.duration) * 100)
-                });
+    function updateMuteIcon(isMuted) {
+        const muteIcon = document.querySelector('.mute-toggle-overlay svg');
+        if (muteIcon) {
+            if (isMuted) {
+                muteIcon.innerHTML = '<path d="M11 5L6 9H2v6h4l5 4V5zM23 9l-2 2-2-2-2 2 2 2-2 2 2 2 2-2 2 2 2-2-2-2 2-2z"/>';
+            } else {
+                muteIcon.innerHTML = '<path d="M11 5L6 9H2v6h4l5 4V5zM19.07 4.93l-1.41 1.41C19.1 7.79 20 9.79 20 12s-.9 4.21-2.34 5.66l1.41 1.41C20.88 17.26 22 14.76 22 12s-1.12-5.26-2.93-7.07zM16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>';
             }
-        });
-        
-        // Track percentage milestones
-        const percentages = [25, 50, 75, 100];
-        percentages.forEach(percent => {
-            const targetTime = (percent / 100) * videoState.duration;
-            const key = `${percent}%`;
-            
-            if (currentTime >= targetTime && !videoState.progressTracked.has(key)) {
-                videoState.progressTracked.add(key);
-                
-                trackVideoEvent('video_progress', {
-                    progress_percent: percent,
-                    current_time: currentTime,
-                    watched_ms: videoState.totalWatchedMs
-                });
-            }
-        });
+        }
     }
     
     /**
-     * Track video event
+     * Setup page unload tracking to report final results
      */
-    function trackVideoEvent(eventName, parameters = {}) {
-        const eventData = {
-            video_id: VIDEO_ID,
-            video_platform: 'youtube',
-            study_id: 'instagram_study',
-            ...parameters
+    function setupUnloadTracking() {
+        // Handle page unload - report total watch time
+        const reportFinalResults = () => {
+            if (!sessionState.isTrackingEnabled || !sessionState.hasStartedOnce) {
+                console.log('No video interaction to report');
+                return;
+            }
+            
+            // Add any current play time
+            if (sessionState.currentPlayStartTime !== null && sessionState.player) {
+                const currentTime = sessionState.player.getCurrentTime();
+                const watchedDuration = currentTime - sessionState.currentPlayStartTime;
+                if (watchedDuration > 0) {
+                    sessionState.totalWatchTimeSeconds += watchedDuration;
+                }
+            }
+            
+            const totalMinutes = sessionState.totalWatchTimeSeconds / 60;
+            const completionRate = sessionState.duration > 0 ? 
+                (sessionState.totalWatchTimeSeconds / sessionState.duration) * 100 : 0;
+            
+            console.log('=== FINAL VIDEO SESSION REPORT ===');
+            console.log(`Total watch time: ${sessionState.totalWatchTimeSeconds.toFixed(2)} seconds (${totalMinutes.toFixed(2)} minutes)`);
+            console.log(`Play count: ${sessionState.playCount}`);
+            console.log(`Completion rate: ${Math.min(100, completionRate).toFixed(1)}%`);
+            console.log(`Video duration: ${sessionState.duration} seconds`);
+            
+            // Send to GA4 - only one event with total watch time
+            if (window.GALite && window.GALite.track) {
+                window.GALite.track('video_session_complete', {
+                    video_id: VIDEO_ID,
+                    total_watch_time_seconds: Math.round(sessionState.totalWatchTimeSeconds),
+                    total_watch_time_minutes: Math.round(totalMinutes * 100) / 100, // Round to 2 decimals
+                    play_count: sessionState.playCount,
+                    completion_rate_percent: Math.min(100, Math.round(completionRate)),
+                    video_duration_seconds: Math.round(sessionState.duration),
+                    session_duration_seconds: sessionState.sessionStartTime ? 
+                        Math.round((Date.now() - sessionState.sessionStartTime) / 1000) : 0,
+                    study_id: 'instagram_study'
+                });
+                
+                console.log('✅ Final video session data sent to GA4');
+            }
         };
         
-        console.log(`Tracking ${eventName}:`, eventData);
-        window.GALite.track(eventName, eventData);
+        // Multiple event listeners for different unload scenarios
+        window.addEventListener('beforeunload', reportFinalResults);
+        window.addEventListener('pagehide', reportFinalResults);
+        
+        // Also track when page becomes hidden (user switches tabs)
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                reportFinalResults();
+            }
+        });
     }
     
     /**
-     * Toggle mute functionality
+     * Toggle mute functionality for the overlay
      */
     function toggleMute() {
-        if (!videoState.player) return;
+        if (!sessionState.player) return;
         
-        if (videoState.player.isMuted()) {
-            videoState.player.unMute();
-            videoState.isMuted = false;
+        if (sessionState.player.isMuted()) {
+            sessionState.player.unMute();
+            updateMuteIcon(false);
         } else {
-            videoState.player.mute();
-            videoState.isMuted = true;
-        }
-        
-        trackVideoEvent('video_mute_toggle', {
-            is_muted: videoState.isMuted,
-            current_time: videoState.currentTime
-        });
-        
-        // Update mute icon
-        updateMuteIcon();
-    }
-    
-    /**
-     * Update mute icon display
-     */
-    function updateMuteIcon() {
-        const muteIcon = document.querySelector('.mute-toggle-icon');
-        if (!muteIcon) return;
-        
-        if (videoState.isMuted) {
-            muteIcon.innerHTML = '<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M1 1l22 22"/>';
-        } else {
-            muteIcon.innerHTML = '<path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>';
+            sessionState.player.mute();
+            updateMuteIcon(true);
         }
     }
     
     /**
-     * Handle page unload - capture final video progress
+     * Initialize video tracking when DOM is ready
      */
-    function handlePageUnload() {
-        if (!videoState.player || !videoState.isStarted) {
-            return; // No video data to capture
+    function initVideoTracking() {
+        console.log('Initializing session-based video tracking...');
+        
+        // Wait for GALite to be available
+        if (!window.GALite) {
+            setTimeout(initVideoTracking, 100);
+            return;
         }
         
-        const currentTime = videoState.currentTime;
-        const totalWatchedS = Math.floor(videoState.totalWatchedMs / 1000);
-        const completionRate = videoState.duration > 0 ? (currentTime / videoState.duration) * 100 : 0;
+        // Load YouTube API
+        loadYouTubeAPI();
         
-        console.log('Page unload - capturing final video progress');
-        
-        // Send final progress event
-        trackVideoEvent('video_session_end', {
-            final_position: currentTime,
-            total_watched_s: totalWatchedS,
-            completion_rate: Math.min(100, completionRate),
-            session_duration_s: videoState.startTime ? Math.floor((Date.now() - videoState.startTime) / 1000) : 0,
-            max_watched_s: Math.floor(videoState.maxWatched),
-            video_duration: videoState.duration
-        });
-        
-        // Also send a final progress milestone if they watched significant content
-        if (currentTime >= 5 && !videoState.progressTracked.has('session_end')) {
-            videoState.progressTracked.add('session_end');
+        // Set up mute toggle
+        const muteOverlay = document.querySelector('.mute-toggle-overlay');
+        if (muteOverlay) {
+            muteOverlay.style.pointerEvents = 'auto';
+            muteOverlay.style.opacity = '0.1';
             
-            trackVideoEvent('video_progress', {
-                progress_type: 'session_end',
-                current_time: currentTime,
-                watched_ms: videoState.totalWatchedMs,
-                percent_watched: Math.min(100, completionRate)
+            muteOverlay.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleMute();
+                
+                // Show mute icon briefly
+                muteOverlay.classList.add('visible');
+                setTimeout(() => {
+                    muteOverlay.classList.remove('visible');
+                }, 1000);
             });
         }
+        
+        console.log('Session-based video tracking initialized');
     }
     
-    // Initialize when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', loadYouTubeAPI);
-    } else {
-        loadYouTubeAPI();
-    }
-    
-    // Capture video progress on page unload
-    window.addEventListener('beforeunload', handlePageUnload);
-    window.addEventListener('pagehide', handlePageUnload);
-    window.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-            handlePageUnload();
-        }
-    });
-    
-    // Expose mute toggle for click handlers
+    // Expose toggle function for external use
     window.VideoTracker = {
-        toggleMute: toggleMute,
-        getState: () => ({ ...videoState })
+        toggleMute: toggleMute
     };
+    
+    // Auto-initialize when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initVideoTracking);
+    } else {
+        initVideoTracking();
+    }
     
 })();
