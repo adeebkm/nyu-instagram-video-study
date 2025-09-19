@@ -7,7 +7,7 @@
     'use strict';
     
     // Configuration  
-    const GA_MEASUREMENT_ID = 'G-XXXXXXXX'; // Update with video study measurement ID
+    const GA_MEASUREMENT_ID = 'G-BXHHQPMWHG'; // Update with video study measurement ID
     const PROLIFIC_ID_KEY = 'prolific_id';
     
     // Global tracking state
