@@ -339,12 +339,58 @@
         }
     }
     
+    /**
+     * Handle page unload - capture final video progress
+     */
+    function handlePageUnload() {
+        if (!videoState.player || !videoState.isStarted) {
+            return; // No video data to capture
+        }
+        
+        const currentTime = videoState.currentTime;
+        const totalWatchedS = Math.floor(videoState.totalWatchedMs / 1000);
+        const completionRate = videoState.duration > 0 ? (currentTime / videoState.duration) * 100 : 0;
+        
+        console.log('Page unload - capturing final video progress');
+        
+        // Send final progress event
+        trackVideoEvent('video_session_end', {
+            final_position: currentTime,
+            total_watched_s: totalWatchedS,
+            completion_rate: Math.min(100, completionRate),
+            session_duration_s: videoState.startTime ? Math.floor((Date.now() - videoState.startTime) / 1000) : 0,
+            max_watched_s: Math.floor(videoState.maxWatched),
+            video_duration: videoState.duration
+        });
+        
+        // Also send a final progress milestone if they watched significant content
+        if (currentTime >= 5 && !videoState.progressTracked.has('session_end')) {
+            videoState.progressTracked.add('session_end');
+            
+            trackVideoEvent('video_progress', {
+                progress_type: 'session_end',
+                current_time: currentTime,
+                watched_ms: videoState.totalWatchedMs,
+                percent_watched: Math.min(100, completionRate)
+            });
+        }
+    }
+    
     // Initialize when DOM is ready
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', loadYouTubeAPI);
     } else {
         loadYouTubeAPI();
     }
+    
+    // Capture video progress on page unload
+    window.addEventListener('beforeunload', handlePageUnload);
+    window.addEventListener('pagehide', handlePageUnload);
+    window.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+            handlePageUnload();
+        }
+    });
     
     // Expose mute toggle for click handlers
     window.VideoTracker = {
