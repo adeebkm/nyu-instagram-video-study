@@ -19,7 +19,7 @@
         startTime: null,
         totalWatchedMs: 0,
         player: null,
-        isMuted: true,
+        isMuted: false,
         currentTime: 0
     };
     
@@ -93,13 +93,26 @@
         console.log('YouTube player ready');
         videoState.duration = videoState.player.getDuration();
         
+        // Ensure video starts unmuted
+        videoState.player.unMute();
+        videoState.isMuted = false;
+        
         // Set up time tracking interval
         setInterval(() => {
             if (videoState.player && videoState.player.getPlayerState() === YT.PlayerState.PLAYING) {
                 const currentTime = videoState.player.getCurrentTime();
                 updateVideoProgress(currentTime);
             }
+            
+            // Anti-pause: If video is paused, resume it immediately
+            if (videoState.player && videoState.player.getPlayerState() === YT.PlayerState.PAUSED) {
+                console.log('Video paused - resuming automatically');
+                videoState.player.playVideo();
+            }
         }, 250); // Check every 250ms for smooth tracking
+        
+        // Update mute icon to reflect unmuted state
+        updateMuteIcon();
         
         // Wait for tap-to-start before beginning tracking
         waitForTapToStart();
