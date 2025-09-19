@@ -20,7 +20,10 @@
         hasStartedOnce: false, // Track if video ever started playing
         playCount: 0, // How many times video was played
         lastReportedTime: 0, // Prevent duplicate time counting
-        hasReportedFinalResults: false // Prevent duplicate final reports
+        hasReportedFinalResults: false, // Prevent duplicate final reports
+        milestonesReached: new Set(), // Track which milestones have been reached (25, 50, 75, 100)
+        completionCount: 0, // Track how many times video was completed
+        maxProgressReached: 0 // Track furthest point reached in video
     };
     
     // YouTube API ready flag
@@ -80,6 +83,11 @@
         console.log('YouTube player ready');
         sessionState.duration = sessionState.player.getDuration();
         
+        // IMPORTANT: Stop any autoplay immediately
+        sessionState.player.pauseVideo();
+        sessionState.player.mute(); // Ensure it's muted
+        console.log('Video paused - waiting for Tap to Start');
+        
         // Wait for "Tap to Start" before enabling tracking
         waitForTapToStart();
         
@@ -92,6 +100,11 @@
      */
     function onPlayerStateChange(event) {
         if (!sessionState.isTrackingEnabled) {
+            // CRITICAL: Prevent any playback before "Tap to Start"
+            if (event.data === YT.PlayerState.PLAYING) {
+                console.log('Video tried to autoplay - stopping until Tap to Start');
+                sessionState.player.pauseVideo();
+            }
             return; // Don't track until "Tap to Start" is clicked
         }
         
@@ -100,6 +113,8 @@
         switch (event.data) {
             case YT.PlayerState.PLAYING:
                 handleVideoPlay(currentTime);
+                // Set up milestone tracking during playback
+                setupMilestoneTracking();
                 break;
                 
             case YT.PlayerState.PAUSED:
@@ -151,8 +166,73 @@
         console.log('Video ended');
         handleVideoPause(currentTime); // Count the final segment
         
+        // Track completion
+        sessionState.completionCount++;
+        
+        // Send 100% milestone if not already sent
+        if (!sessionState.milestonesReached.has(100)) {
+            sessionState.milestonesReached.add(100);
+            sendMilestoneEvent(100);
+        }
+        
+        console.log(`Video completion #${sessionState.completionCount}`);
+        
         // Video completed - could restart, so reset for next play
         sessionState.currentPlayStartTime = null;
+    }
+    
+    /**
+     * Set up milestone tracking during video playback
+     */
+    function setupMilestoneTracking() {
+        if (!sessionState.player || sessionState.duration <= 0) return;
+        
+        // Check milestones every second during playback
+        const checkMilestones = () => {
+            if (!sessionState.isTrackingEnabled) return;
+            
+            const currentTime = sessionState.player.getCurrentTime();
+            const progressPercent = (currentTime / sessionState.duration) * 100;
+            
+            // Update max progress
+            if (currentTime > sessionState.maxProgressReached) {
+                sessionState.maxProgressReached = currentTime;
+            }
+            
+            // Check for milestone achievements
+            [25, 50, 75].forEach(milestone => {
+                if (progressPercent >= milestone && !sessionState.milestonesReached.has(milestone)) {
+                    sessionState.milestonesReached.add(milestone);
+                    sendMilestoneEvent(milestone);
+                }
+            });
+            
+            // Continue checking if video is still playing
+            if (sessionState.player.getPlayerState() === YT.PlayerState.PLAYING) {
+                setTimeout(checkMilestones, 1000);
+            }
+        };
+        
+        // Start milestone checking
+        setTimeout(checkMilestones, 1000);
+    }
+    
+    /**
+     * Send milestone event to GA4
+     */
+    function sendMilestoneEvent(percentage) {
+        console.log(`🎯 Milestone reached: ${percentage}%`);
+        
+        if (window.GALite && window.GALite.track) {
+            window.GALite.track('video_progress', {
+                video_id: VIDEO_ID,
+                progress_percentage: percentage,
+                current_time_seconds: Math.round(sessionState.player.getCurrentTime()),
+                play_count_at_milestone: sessionState.playCount,
+                total_watch_time_so_far: Math.round(sessionState.totalWatchTimeSeconds),
+                study_id: 'instagram_study'
+            });
+        }
     }
     
     /**
@@ -243,17 +323,27 @@
             console.log('=== FINAL VIDEO SESSION REPORT ===');
             console.log(`Total watch time: ${sessionState.totalWatchTimeSeconds.toFixed(2)} seconds (${totalMinutes.toFixed(2)} minutes)`);
             console.log(`Play count: ${sessionState.playCount}`);
+            console.log(`Completion count: ${sessionState.completionCount}`);
             console.log(`Completion rate: ${Math.min(100, completionRate).toFixed(1)}%`);
+            console.log(`Milestones reached: ${Array.from(sessionState.milestonesReached).sort((a,b) => a-b).join(', ')}%`);
+            console.log(`Max progress reached: ${(sessionState.maxProgressReached / sessionState.duration * 100).toFixed(1)}%`);
             console.log(`Video duration: ${sessionState.duration} seconds`);
             
-            // Send to GA4 - only one event with total watch time
+            // Send to GA4 - comprehensive final report
             if (window.GALite && window.GALite.track) {
                 window.GALite.track('video_session_complete', {
                     video_id: VIDEO_ID,
                     total_watch_time_seconds: Math.round(sessionState.totalWatchTimeSeconds),
                     total_watch_time_minutes: Math.round(totalMinutes * 100) / 100, // Round to 2 decimals
                     play_count: sessionState.playCount,
+                    completion_count: sessionState.completionCount,
                     completion_rate_percent: Math.min(100, Math.round(completionRate)),
+                    milestones_reached: Array.from(sessionState.milestonesReached).sort((a,b) => a-b).join(','),
+                    milestone_25_reached: sessionState.milestonesReached.has(25),
+                    milestone_50_reached: sessionState.milestonesReached.has(50),
+                    milestone_75_reached: sessionState.milestonesReached.has(75),
+                    milestone_100_reached: sessionState.milestonesReached.has(100),
+                    max_progress_percent: Math.round((sessionState.maxProgressReached / sessionState.duration) * 100),
                     video_duration_seconds: Math.round(sessionState.duration),
                     session_duration_seconds: sessionState.sessionStartTime ? 
                         Math.round((Date.now() - sessionState.sessionStartTime) / 1000) : 0,
