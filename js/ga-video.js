@@ -93,10 +93,6 @@
         console.log('YouTube player ready');
         videoState.duration = videoState.player.getDuration();
         
-        // Ensure video starts unmuted
-        videoState.player.unMute();
-        videoState.isMuted = false;
-        
         // Set up time tracking interval
         setInterval(() => {
             if (videoState.player && videoState.player.getPlayerState() === YT.PlayerState.PLAYING) {
@@ -111,10 +107,7 @@
             }
         }, 250); // Check every 250ms for smooth tracking
         
-        // Update mute icon to reflect unmuted state
-        updateMuteIcon();
-        
-        // Wait for tap-to-start before beginning tracking
+        // Wait for tap-to-start before beginning video playback
         waitForTapToStart();
     }
     
@@ -138,25 +131,65 @@
     }
     
     /**
-     * Wait for tap-to-start before beginning tracking
+     * Wait for tap-to-start before beginning video playback
      */
     function waitForTapToStart() {
         const tapOverlay = document.getElementById('tap-to-start-overlay');
         if (!tapOverlay) {
-            // No tap-to-start overlay, begin tracking immediately
+            // No tap-to-start overlay, start video immediately
+            startVideo();
             return;
         }
         
         // Check if overlay is already hidden
         if (tapOverlay.classList.contains('hidden') || 
             window.getComputedStyle(tapOverlay).display === 'none') {
+            startVideo();
             return;
         }
         
         // Wait for tap-to-start click
         tapOverlay.addEventListener('click', () => {
-            console.log('Tap to start - enabling video tracking');
+            console.log('Tap to start - starting video playback');
+            startVideo();
         }, { once: true });
+    }
+    
+    /**
+     * Start video playback with proper autoplay handling
+     */
+    function startVideo() {
+        if (!videoState.player) {
+            console.log('Player not ready yet');
+            return;
+        }
+        
+        console.log('Starting video playback...');
+        
+        try {
+            // Start muted first (browsers allow muted autoplay)
+            videoState.player.mute();
+            videoState.isMuted = true;
+            
+            // Play the video
+            videoState.player.playVideo();
+            
+            // After a short delay, unmute it
+            setTimeout(() => {
+                videoState.player.unMute();
+                videoState.isMuted = false;
+                updateMuteIcon();
+                console.log('Video unmuted after autoplay');
+            }, 500);
+            
+        } catch (error) {
+            console.log('Autoplay failed:', error);
+            // Fallback: keep muted and let user unmute manually
+            videoState.player.mute();
+            videoState.isMuted = true;
+            videoState.player.playVideo();
+            updateMuteIcon();
+        }
     }
     
     /**
