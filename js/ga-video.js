@@ -19,7 +19,8 @@
         duration: 0,
         hasStartedOnce: false, // Track if video ever started playing
         playCount: 0, // How many times video was played
-        lastReportedTime: 0 // Prevent duplicate time counting
+        lastReportedTime: 0, // Prevent duplicate time counting
+        hasReportedFinalResults: false // Prevent duplicate final reports
     };
     
     // YouTube API ready flag
@@ -214,10 +215,17 @@
     function setupUnloadTracking() {
         // Handle page unload - report total watch time
         const reportFinalResults = () => {
-            if (!sessionState.isTrackingEnabled || !sessionState.hasStartedOnce) {
-                console.log('No video interaction to report');
+            if (!sessionState.isTrackingEnabled || !sessionState.hasStartedOnce || sessionState.hasReportedFinalResults) {
+                if (sessionState.hasReportedFinalResults) {
+                    console.log('Final results already reported, skipping duplicate');
+                } else {
+                    console.log('No video interaction to report');
+                }
                 return;
             }
+            
+            // Mark as reported to prevent duplicates
+            sessionState.hasReportedFinalResults = true;
             
             // Add any current play time
             if (sessionState.currentPlayStartTime !== null && sessionState.player) {
