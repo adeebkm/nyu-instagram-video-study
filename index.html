@@ -224,6 +224,32 @@
             text-align: center;
         }
         
+        .return-survey-btn {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            border: none;
+            border-radius: 20px;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            z-index: 1000;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .return-survey-btn:hover {
+            background: rgba(0, 0, 0, 0.9);
+            transform: scale(1.05);
+        }
+        
+        .return-survey-btn:active {
+            transform: scale(0.95);
+        }
+        
         .follow-button {
             background: transparent;
             color: #fff;
@@ -345,6 +371,11 @@
 <body>
     <div class="mobile-container">
         
+        <!-- Return to Survey Button -->
+        <button class="return-survey-btn" id="return-survey-btn">
+            ← Return to Survey
+        </button>
+        
         <!-- Tap to Start Overlay -->
         <div class="tap-to-start-overlay" id="tap-to-start-overlay">
             <div class="tap-to-start-icon">
@@ -464,6 +495,19 @@
                         });
                     }
                 });
+            });
+            
+            // Return to Survey functionality
+            const returnSurveyBtn = document.getElementById('return-survey-btn');
+            returnSurveyBtn.addEventListener('click', () => {
+                // Simple navigation back to previous page
+                if (document.referrer && document.referrer !== window.location.href) {
+                    // Go back to the page that linked here
+                    window.location.href = document.referrer;
+                } else {
+                    // Fallback: use browser back button
+                    window.history.back();
+                }
             });
             
             // Tap to Start functionality
